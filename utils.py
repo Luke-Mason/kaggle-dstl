@@ -20,7 +20,7 @@ import tifffile as tiff
 
 csv.field_size_limit(sys.maxsize)
 
-
+dataset_path = '/mnt/e/ML_DATA/DSTL/dstl-satellite-imagery-feature-detection/'
 _x_max_y_min = None
 _wkt_data = None
 
@@ -28,7 +28,7 @@ _wkt_data = None
 def get_x_max_y_min(im_id: str) -> Tuple[float, float]:
     global _x_max_y_min
     if _x_max_y_min is None:
-        with open('./grid_sizes.csv') as f:
+        with open(dataset_path + 'grid_sizes.csv/grid_sizes.csv') as f:
             _x_max_y_min = {im_id: (float(x), float(y))
                           for im_id, x, y in islice(csv.reader(f), 1, None)}
     return _x_max_y_min[im_id]
@@ -38,19 +38,19 @@ def get_wkt_data() -> Dict[str, Dict[int, str]]:
     global _wkt_data
     if _wkt_data is None:
         _wkt_data = {}
-        with open('./train_wkt_v4.csv') as f:
+        with open(dataset_path + 'train_wkt_v4.csv/train_wkt_v4.csv') as f:
             for im_id, poly_type, poly in islice(csv.reader(f), 1, None):
                 _wkt_data.setdefault(im_id, {})[int(poly_type)] = poly
     return _wkt_data
 
 
 def load_image(im_id: str, rgb_only=False, align=True) -> np.ndarray:
-    im_rgb = tiff.imread('./three_band/{}.tif'.format(im_id)).transpose([1, 2, 0])
+    im_rgb = tiff.imread(dataset_path + 'three_band/three_band/{}.tif'.format(im_id)).transpose([1, 2, 0])
     if rgb_only:
         return im_rgb
-    im_p = np.expand_dims(tiff.imread('sixteen_band/{}_P.tif'.format(im_id)), 2)
-    im_m = tiff.imread('sixteen_band/{}_M.tif'.format(im_id)).transpose([1, 2, 0])
-    im_a = tiff.imread('sixteen_band/{}_A.tif'.format(im_id)).transpose([1, 2, 0])
+    im_p = np.expand_dims(tiff.imread(dataset_path + 'sixteen_band/sixteen_band/{}_P.tif'.format(im_id)), 2)
+    im_m = tiff.imread(dataset_path + 'sixteen_band/sixteen_band/{}_M.tif'.format(im_id)).transpose([1, 2, 0])
+    im_a = tiff.imread(dataset_path + 'sixteen_band/sixteen_band/{}_A.tif'.format(im_id)).transpose([1, 2, 0])
     w, h = im_rgb.shape[:2]
     if align:
         key = lambda x: '{}_{}'.format(im_id, x)
