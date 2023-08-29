@@ -9,43 +9,46 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-@attr.s(slots=True)
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass
 class HyperParams:
-    classes = attr.ib(default=list(range(10)))
-    net = attr.ib(default='UNet')
-    n_channels = attr.ib(default=12)  # max 20
-    total_classes = 10
-    thresholds = attr.ib(default=[0.5])
-    pre_buffer = attr.ib(default=0.0)
+    classes: List[int] = field(default_factory=list(range(10)))
+    net: str = 'UNet'
+    n_channels: int = 12  # max 20
+    total_classes: int = 10
+    thresholds: List[float] = field(default_factory=lambda: [0.5])
+    pre_buffer: float = 0.0
 
-    patch_inner = attr.ib(default=64)
-    patch_border = attr.ib(default=16)
+    patch_inner: int = 64
+    patch_border: int = 16
 
-    augment_rotations = attr.ib(default=10.0)  # degrees
-    augment_flips = attr.ib(default=0)
-    augment_channels = attr.ib(default=0.0)
+    augment_rotations: float = 10.0  # degrees
+    augment_flips: int = 0
+    augment_channels: float = 0.0
 
-    validation_square = attr.ib(default=400)
+    validation_square: int = 400
 
-    dropout = attr.ib(default=0.0)
-    bn = attr.ib(default=1)
-    activation = attr.ib(default='relu')
-    top_scale = attr.ib(default=2)
-    log_loss = attr.ib(default=1.0)
-    dice_loss = attr.ib(default=0.0)
-    jaccard_loss = attr.ib(default=0.0)
-    dist_loss = attr.ib(default=0.0)
-    dist_dice_loss = attr.ib(default=0.0)
-    dist_jaccard_loss = attr.ib(default=0.0)
+    dropout: float = 0.0
+    bn: int = 1
+    activation: str = 'relu'
+    top_scale: int = 2
+    log_loss: float = 1.0
+    dice_loss: float = 0.0
+    jaccard_loss: float = 0.0
+    dist_loss: float = 0.0
+    dist_dice_loss: float = 0.0
+    dist_jaccard_loss: float = 0.0
 
-    filters_base = attr.ib(default=32)
+    filters_base: int = 32
 
-    n_epochs = attr.ib(default=100)
-    oversample = attr.ib(default=0.0)
-    lr = attr.ib(default=0.0001)
-    lr_decay = attr.ib(default=0.0)
-    weight_decay = attr.ib(default=0.0)
-    batch_size = attr.ib(default=128)
+    n_epochs: int = 100
+    oversample: float = 0.0
+    lr: float = 0.0001
+    lr_decay: float = 0.0
+    weight_decay: float = 0.0
+    batch_size: int = 128
 
     @property
     def n_classes(self):
@@ -81,6 +84,7 @@ class HyperParams:
                     setattr(self, field.name, v)
             if values:
                 raise ValueError('Unknown hyperparams: {}'.format(values))
+
 
 
 class BaseNet(nn.Module):
