@@ -16,13 +16,10 @@ def start():
     arg = parser.add_argument
     arg('logdir', help='Path to log directory')
     arg('--hps', help='Change hyperparameters in k1=v1,k2=v2 format')
-    arg('--all', action='store_true',
-        help='Train on all images without validation')
-    arg('--validation', choices=['random', 'stratified', 'square', 'custom'],
-        default='custom', help='validation strategy')
+    arg('--all', action='store_true', help='Train on all images without validation')
+    arg('--validation', choices=['random', 'stratified', 'square', 'custom'], default='custom', help='validation strategy')
     arg('--valid-only', action='store_true')
-    arg('--only',
-        help='Train on this image ids only (comma-separated) without validation')
+    arg('--only', help='Train on this image ids only (comma-separated) without validation')
     arg('--clean', action='store_true', help='Clean logdir')
     arg('--no-mp', action='store_true', help='Disable multiprocessing')
     arg('--model-path', type=Path)

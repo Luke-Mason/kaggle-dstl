@@ -3,7 +3,6 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
 import logging
-import json
 from pathlib import Path
 import pickle
 from typing import Dict, Tuple

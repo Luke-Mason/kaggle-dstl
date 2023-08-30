@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-import argparse
-import json
 from functools import partial
 from pathlib import Path
-from pprint import pprint
 import random
 import time
 from typing import List, Iterable
@@ -11,7 +8,6 @@ from typing import List, Iterable
 import attr
 import cv2
 import numpy as np
-from sklearn.model_selection import ShuffleSplit
 import tensorboard_logger
 import torch
 from torch.autograd import Variable
@@ -19,14 +15,22 @@ import torch.cuda
 import torch.optim as optim
 import torch.nn as nn
 import tqdm
-
+import torchvision
 import utils
 from models import HyperParams
 import models
-
+from torch.utils.tensorboard import SummaryWriter
 
 logger = utils.get_logger(__name__)
 
+tb = SummaryWriter()
+model = CNN()
+train_loader = torch.utils.data.DataLoader(train_set,batch_size = 100, shuffle = True)
+images, labels = next(iter(train_loader))
+grid = torchvision.utils.make_grid(images)
+tb.add_image("images", grid)
+tb.add_graph(model, images)
+tb.close()
 
 @attr.s
 class Image:
@@ -53,18 +57,18 @@ class Image:
 class Model:
     def __init__(self, hps: HyperParams):
         self.hps = hps
-        self.net = getattr(models, hps.net)(hps)
+        self.nnetwork = getattr(models, hps.net)(hps)
         self.bce_loss = nn.BCELoss()
         self.mse_loss = nn.MSELoss()
         self.optimizer = None  # type: optim.Optimizer
-        self.tb_logger = None  # type: tensorboard_logger.Logger
+        self.tb_logger = None  # type: SummaryWriter
         self.logdir = None  # type: Path
         self.on_gpu = torch.cuda.is_available()
         if self.on_gpu:
-            self.net.cuda()
+            self.nnetwork.cuda()
 
     def _init_optimizer(self, lr):
-        return optim.Adam(self.net.parameters(),
+        return optim.Adam(self.nnetwork.parameters(),
                           lr=lr, weight_decay=self.hps.weight_decay)
 
     def _var(self, x: torch.FloatTensor) -> torch.Tensor:
@@ -72,16 +76,17 @@ class Model:
 
     def train_step(self, x, y, dist_y):
         self.optimizer.zero_grad()
-        y_pred = self.net(self._var(x))
+        y_pred = self.nnetwork(self._var(x))
         batch_size = x.size()[0]
         losses = self.losses(y, dist_y, y_pred)
         cls_losses = [float(l.data[0]) for l in losses]
-        loss = losses[0]
+        total_loss = losses[0]
         for l in losses[1:]:
-            loss += l
-        (loss * batch_size).backward()
+            total_loss += l
+        (total_loss * batch_size).backward()
         self.optimizer.step()
-        self.net.global_step += 1
+        self.nnetwork.global_step += 1
+
         return cls_losses
 
     def losses(self,
@@ -140,7 +145,9 @@ class Model:
     def train(self, logdir: Path, train_ids: List[str], valid_ids: List[str],
               validation: str, no_mp: bool=False, valid_only: bool=False,
               model_path: Path=None):
-        self.tb_logger = tensorboard_logger.Logger(str(logdir))
+        lr = self.hps.lr
+        comment = f' batch_size = {self.hps.batch_size} lr = {lr} shuffle = {shuffle}'
+        self.tb_logger = SummaryWriter(comment=comment)
         self.logdir = logdir
         train_images = [self.load_image(im_id) for im_id in sorted(train_ids)]
         valid_images = None
@@ -150,7 +157,6 @@ class Model:
         else:
             start_epoch = self.restore_last_snapshot(logdir)
         square_validation = validation == 'square'
-        lr = self.hps.lr
         self.optimizer = self._init_optimizer(lr)
         for n_epoch in range(start_epoch, self.hps.n_epochs):
             if self.hps.lr_decay:
@@ -168,7 +174,7 @@ class Model:
                     lr = self.hps.lr / 25
                     self.optimizer = self._init_optimizer(lr)
             logger.info('Starting epoch {}, step {:,}, lr {:.8f}'.format(
-                n_epoch + 1, self.net.global_step[0], lr))
+                n_epoch + 1, self.nnetwork.global_step[0], lr))
             subsample = 1 if valid_only else 2  # make validation more often
             for _ in range(subsample):
                 if not valid_only:
@@ -191,6 +197,10 @@ class Model:
             if valid_only:
                 break
             self.save_snapshot(n_epoch)
+
+            print("batch_size:", batch_size, "lr:", lr, "shuffle:", shuffle)
+            print("epoch:", epoch, "total_correct:", total_correct, "loss:", total_loss)
+        print("__________________________________________________________")
         self.tb_logger = None
         self.logdir = None
 
@@ -251,7 +261,7 @@ class Model:
                         subsample: int=1,
                         square_validation: bool=False,
                         no_mp: bool=False):
-        self.net.train()
+        self.nnetwork.train()
         b = self.hps.patch_border
         s = self.hps.patch_inner
         # Extra margin for rotation
@@ -262,7 +272,7 @@ class Model:
         n_batches = int(
             mean_area / (s + b) / self.hps.batch_size / subsample / 2)
 
-        def gen_batch(_):
+        def generate_batch(_):
             inputs, outputs, dist_outputs = [], [], []
             for _ in range(self.hps.batch_size):
                 im, (x, y) = self.sample_im_xy(train_images, square_validation)
@@ -312,7 +322,7 @@ class Model:
                     torch.from_numpy(np.array(outputs)),
                     torch.from_numpy(np.array(dist_outputs)))
 
-        self._train_on_feeds(gen_batch, n_batches, no_mp=no_mp)
+        self._train_on_feeds(generate_batch, n_batches, no_mp=no_mp)
 
     def sample_im_xy(self, train_images, square_validation=False):
         b = self.hps.patch_border
@@ -355,7 +365,7 @@ class Model:
                     self._log_value(
                         'loss/cls-mean', np.mean([
                             l for ls in losses for l in ls[-log_step:]]))
-                pred_y = self.net(self._var(x)).data.cpu()
+                pred_y = self.nnetwork(self._var(x)).data.cpu()
                 self._update_jaccard(jaccard_stats, y.numpy(), pred_y.numpy())
                 self._log_jaccard(jaccard_stats)
                 if i == im_log_step:
@@ -472,11 +482,11 @@ class Model:
                     cv2.imwrite(fname('{}-d'.format(cls)), dist_ys[i, j] * 255)
 
     def _log_value(self, name, value):
-        self.tb_logger.log_value(name, value, step=self.net.global_step[0])
+        self.tb_logger.add_scalar(name, value, self.nnetwork.global_step[0])
 
     def validate_on_images(self, valid_images: List[Image],
                            subsample: int=1):
-        self.net.eval()
+        self.nnetwork.eval()
         b = self.hps.patch_border
         s = self.hps.patch_inner
         losses = [[] for _ in range(self.hps.n_classes)]
@@ -502,7 +512,7 @@ class Model:
                     dist_outputs = dist_outputs.astype(np.float32)
                 else:
                     dist_outputs = np.array([])
-                y_pred = self.net(self._var(torch.from_numpy(inputs)))
+                y_pred = self.nnetwork(self._var(torch.from_numpy(inputs)))
                 step_losses = self.losses(
                     torch.from_numpy(outputs),
                     torch.from_numpy(dist_outputs),
@@ -536,7 +546,7 @@ class Model:
     def restore_snapshot(self, model_path: Path):
         logger.info('Loading snapshot {}'.format(model_path))
         state = torch.load(str(model_path))
-        self.net.load_state_dict(state)
+        self.nnetwork.load_state_dict(state)
 
     def restore_average_snapshot(self, logdir: Path, epochs: Iterable[int]):
         epochs = list(epochs)
@@ -546,12 +556,12 @@ class Model:
                   for n in epochs]
         average_state = {key: sum(s[key] for s in states) / len(states)
                          for key in states[0].keys()}
-        self.net.load_state_dict(average_state)
+        self.nnetwork.load_state_dict(average_state)
 
     def save_snapshot(self, n_epoch: int):
         model_path = self._model_path(self.logdir, n_epoch)
         logger.info('Saving snapshot {}'.format(model_path))
-        torch.save(self.net.state_dict(), str(model_path))
+        torch.save(self.nnetwork.state_dict(), str(model_path))
 
     def _model_path(self, logdir: Path, n_epoch: int) -> Path:
         return logdir.joinpath('model-{}'.format(n_epoch))
@@ -561,7 +571,7 @@ class Model:
                            no_edges: bool=False,
                            average_shifts: bool=True
                            ) -> np.ndarray:
-        self.net.eval()
+        self.nnetwork.eval()
         c, w, h = im_data.shape
         b = self.hps.patch_border
         s = self.hps.patch_inner
@@ -596,7 +606,7 @@ class Model:
                 gen_batch, tqdm.tqdm(list(
                     utils.chunks(all_xy, self.hps.batch_size // (4 * n_rot)))),
                 threads=2):
-            y_pred = self.net(self._var(torch.from_numpy(inputs)))
+            y_pred = self.nnetwork(self._var(torch.from_numpy(inputs)))
             for idx, mask in enumerate(y_pred.data.cpu().numpy()):
                 x, y = xy_batch[idx // n_rot]
                 i = idx % n_rot
