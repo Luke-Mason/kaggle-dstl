@@ -1,89 +1,19 @@
-import json
 from functools import partial
-from pathlib import Path
-
-import attr
 import torch
 import torch.cuda
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-@attr.s(slots=True)
-class HyperParams:
-    classes = attr.ib(default=list(range(10)))
-    net = attr.ib(default='UNet')
-    n_channels = attr.ib(default=12)  # max 20
-    total_classes = 10
-    thresholds = attr.ib(default=[0.5])
-    pre_buffer = attr.ib(default=0.0)
-
-    patch_inner = attr.ib(default=64)
-    patch_border = attr.ib(default=16)
-
-    augment_rotations = attr.ib(default=10.0)  # degrees
-    augment_flips = attr.ib(default=0)
-    augment_channels = attr.ib(default=0.0)
-
-    validation_square = attr.ib(default=400)
-
-    dropout = attr.ib(default=0.0)
-    bn = attr.ib(default=1)
-    activation = attr.ib(default='relu')
-    top_scale = attr.ib(default=2)
-    log_loss = attr.ib(default=1.0)
-    dice_loss = attr.ib(default=0.0)
-    jaccard_loss = attr.ib(default=0.0)
-    dist_loss = attr.ib(default=0.0)
-    dist_dice_loss = attr.ib(default=0.0)
-    dist_jaccard_loss = attr.ib(default=0.0)
-
-    filters_base = attr.ib(default=32)
-
-    n_epochs = attr.ib(default=100)
-    oversample = attr.ib(default=0.0)
-    lr = attr.ib(default=0.0001)
-    lr_decay = attr.ib(default=0.0)
-    weight_decay = attr.ib(default=0.0)
-    batch_size = attr.ib(default=128)
-
-    @property
-    def n_classes(self):
-        return len(self.classes)
-
-    @property
-    def has_all_classes(self):
-        return self.n_classes == self.total_classes
-
-    @property
-    def needs_dist(self):
-        return (self.dist_loss != 0 or self.dist_dice_loss != 0 or
-                self.dist_jaccard_loss != 0)
-
-    @classmethod
-    def from_dir(cls, root: Path):
-        params = json.loads(root.joinpath('hps.json').read_text())
-        fields = {field.name for field in attr.fields(HyperParams)}
-        return cls(**{k: v for k, v in params.items() if k in fields})
-
-    def update(self, hps_string: str):
-        if hps_string:
-            values = dict(pair.split('=') for pair in hps_string.split(','))
-            for field in attr.fields(HyperParams):
-                v = values.pop(field.name, None)
-                if v is not None:
-                    default = field.default
-                    assert not isinstance(default, bool)
-                    if isinstance(default, (int, float, str)):
-                        v = type(default)(v)
-                    elif isinstance(default, list):
-                        v = [type(default[0])(x) for x in v.split('-')]
-                    setattr(self, field.name, v)
-            if values:
-                raise ValueError('Unknown hyperparams: {}'.format(values))
+from HyperParams import HyperParams
+from modules import UNetModule, conv3x3, concat, DenseUNetModule, DenseBlock, \
+    UpBlock, DownBlock, BasicConv2d, InceptionModule, Inception2Module, Conv3BN, \
+    UNet2Module, UNet3lModule
 
 
 class BaseNet(nn.Module):
+    """
+    Base class for all networks in this file (except for the old one) that
+    sets up the dropout and global step counter
+    """
     def __init__(self, hps: HyperParams):
         super().__init__()
         self.hps = hps
@@ -94,15 +24,10 @@ class BaseNet(nn.Module):
         self.register_buffer('global_step', torch.IntTensor(1).zero_())
 
 
-def conv3x3(in_, out):
-    return nn.Conv2d(in_, out, 3, padding=1)
-
-
-def concat(xs):
-    return torch.cat(xs, 1)
-
-
 class MiniNet(BaseNet):
+    """
+    A small network for testing purposes.
+    """
     def __init__(self, hps):
         super().__init__(hps)
         self.conv1 = nn.Conv2d(hps.n_channels, 4, 1)
@@ -113,11 +38,15 @@ class MiniNet(BaseNet):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = self.conv3(x)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x[:, :, b:-b, b:-b])
 
 
 class OldNet(BaseNet):
+    """
+    A network similar to the one used in the original paper (but with batch
+    normalization) that uses 3x3 convolutions and 2x2 max pooling.
+    """
     def __init__(self, hps):
         super().__init__(hps)
         self.conv1 = nn.Conv2d(hps.n_channels, 64, 5, padding=2)
@@ -130,11 +59,14 @@ class OldNet(BaseNet):
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = self.conv4(x)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x[:, :, b:-b, b:-b])
 
 
 class SmallNet(BaseNet):
+    """
+    A small network for testing purposes.
+    """
     def __init__(self, hps):
         super().__init__(hps)
         self.conv1 = nn.Conv2d(hps.n_channels, 64, 3, padding=1)
@@ -149,7 +81,7 @@ class SmallNet(BaseNet):
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
         x = self.conv5(x)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x[:, :, b:-b, b:-b])
 
 
@@ -158,6 +90,9 @@ class SmallNet(BaseNet):
 
 
 class SmallUNet(BaseNet):
+    """
+    A small UNet for testing purposes.
+    """
     def __init__(self, hps):
         super().__init__(hps)
         self.conv1 = nn.Conv2d(hps.n_channels, 32, 3, padding=1)
@@ -181,34 +116,18 @@ class SmallUNet(BaseNet):
         x = torch.cat([x, x1], 1)
         x = F.relu(self.conv6(x))
         x = self.conv7(x)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x[:, :, b:-b, b:-b])
 
 
-class UNetModule(nn.Module):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        super().__init__()
-        self.conv1 = conv3x3(in_, out)
-        self.conv2 = conv3x3(out, out)
-        self.bn = hps.bn
-        self.activation = getattr(F, hps.activation)
-        if self.bn:
-            self.bn1 = nn.BatchNorm2d(out)
-            self.bn2 = nn.BatchNorm2d(out)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        if self.bn:
-            x = self.bn1(x)
-        x = self.activation(x)
-        x = self.conv2(x)
-        if self.bn:
-            x = self.bn2(x)
-        x = self.activation(x)
-        return x
 
 
 class UNet(BaseNet):
+    """
+    A UNet with 5 scales and 3x3 convolutions. The number/size of filters in
+    each scale is determined by the `filter_factors` attribute multiplied by the
+    `filters_base` attribute.
+    """
     module = UNetModule
     filter_factors = [1, 2, 4, 8, 16]
 
@@ -249,56 +168,20 @@ class UNet(BaseNet):
             x_out = self.dropout2d(x_out)
 
         x_out = self.conv_final(x_out)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x_out[:, :, b:-b, b:-b])
 
-
-class Conv3BN(nn.Module):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        super().__init__()
-        self.conv = conv3x3(in_, out)
-        self.bn = nn.BatchNorm2d(out) if hps.bn else None
-        self.activation = getattr(F, hps.activation)
-
-    def forward(self, x):
-        x = self.conv(x)
-        if self.bn is not None:
-            x = self.bn(x)
-        x = self.activation(x, inplace=True)
-        return x
-
-
-class UNet3lModule(nn.Module):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        super().__init__()
-        self.l1 = Conv3BN(hps, in_, out)
-        self.l2 = Conv3BN(hps, out, out)
-        self.l3 = Conv3BN(hps, out, out)
-
-    def forward(self, x):
-        x = self.l1(x)
-        x = self.l2(x)
-        x = self.l3(x)
-        return x
-
-
 class UNet3l(UNet):
+    """
+    A UNet with 3 convolutional layers for testing purposes
+    """
     module = UNet3lModule
 
 
-class UNet2Module(nn.Module):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        super().__init__()
-        self.l1 = Conv3BN(hps, in_, out)
-        self.l2 = Conv3BN(hps, out, out)
-
-    def forward(self, x):
-        x = self.l1(x)
-        x = self.l2(x)
-        return x
-
-
 class UNet2(BaseNet):
+    """
+    A second UNet
+    """
     def __init__(self, hps):
         super().__init__(hps)
         b = hps.filters_base
@@ -330,68 +213,28 @@ class UNet2(BaseNet):
             x_out = up(torch.cat([self.upsample(x_out), mid(x_skip)], 1))
 
         x_out = self.conv_final(x_out)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x_out[:, :, b:-b, b:-b])
 
 
-class BasicConv2d(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0):
-        super().__init__()
-        self.conv = nn.Conv2d(
-            in_planes, out_planes,
-            kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
-        self.bn = nn.BatchNorm2d(out_planes)
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.relu(x)
-        return x
-
-
-class InceptionModule(nn.Module):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        super().__init__()
-        out_1 = out * 3 // 8
-        out_2 = out * 2 // 8
-        self.conv1x1 = BasicConv2d(in_, out_1, kernel_size=1)
-        self.conv3x3_pre = BasicConv2d(in_, in_ // 2, kernel_size=1)
-        self.conv3x3 = BasicConv2d(in_ // 2, out_1, kernel_size=3, padding=1)
-        self.conv5x5_pre = BasicConv2d(in_, in_ // 4, kernel_size=1)
-        self.conv5x5 = BasicConv2d(in_ // 4, out_2, kernel_size=5, padding=2)
-        assert hps.bn
-        assert hps.activation == 'relu'
-
-    def forward(self, x):
-        return torch.cat([
-            self.conv1x1(x),
-            self.conv3x3(self.conv3x3_pre(x)),
-            self.conv5x5(self.conv5x5_pre(x)),
-        ], 1)
-
-
-class Inception2Module(nn.Module):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        super().__init__()
-        self.l1 = InceptionModule(hps, in_, out)
-        self.l2 = InceptionModule(hps, out, out)
-
-    def forward(self, x):
-        x = self.l1(x)
-        x = self.l2(x)
-        return x
-
-
 class InceptionUNet(UNet):
+    """
+    A UNet with inception modules
+    """
     module = InceptionModule
 
 
 class Inception2UNet(UNet):
+    """
+    A UNet with inception modules v2
+    """
     module = Inception2Module
 
 
 class SimpleSegNet(BaseNet):
+    """
+    A simple SegNet
+    """
     def __init__(self, hps):
         super().__init__(hps)
         s = hps.filters_base
@@ -430,93 +273,20 @@ class SimpleSegNet(BaseNet):
         x = self.dec_1(x)
         # Output
         x = self.conv_final(x)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x[:, :, b:-b, b:-b])
 
 
-class DenseLayer(nn.Module):
-    def __init__(self, in_, out, *, dropout, bn):
-        super().__init__()
-        self.bn = nn.BatchNorm2d(in_) if bn else None
-        self.activation = nn.ReLU(inplace=True)
-        self.conv = conv3x3(in_, out)
-        self.dropout = nn.Dropout2d(p=dropout) if dropout else None
-
-    def forward(self, x):
-        x = self.activation(x)
-        if self.bn is not None:
-            x = self.bn(x)
-        x = self.conv(x)
-        if self.dropout is not None:
-            x = self.dropout(x)
-        return x
-
-
-class DenseBlock(nn.Module):
-    def __init__(self, in_, k, n_layers, dropout, bn):
-        super().__init__()
-        self.out = k * n_layers
-        layer_in = in_
-        self.layers = []
-        for i in range(n_layers):
-            layer = DenseLayer(layer_in, k, dropout=dropout, bn=bn)
-            self.layers.append(layer)
-            setattr(self, 'layer_{}'.format(i), layer)
-            layer_in += k
-
-    def forward(self, x):
-        inputs = [x]
-        outputs = []
-        for i, layer in enumerate(self.layers[:-1]):
-            outputs.append(layer(inputs[i]))
-            inputs.append(concat([outputs[i], inputs[i]]))
-        return torch.cat([self.layers[-1](inputs[-1])] + outputs, 1)
-
-
-class DenseUNetModule(DenseBlock):
-    def __init__(self, hps: HyperParams, in_: int, out: int):
-        n_layers = 4
-        super().__init__(in_, out // n_layers, n_layers,
-                         dropout=hps.dropout, bn=hps.bn)
-
-
 class DenseUNet(UNet):
+    """
+    A UNet with dense blocks
+    """
     module = DenseUNetModule
 
 
-class DownBlock(nn.Module):
-    def __init__(self, in_, out, scale, *, dropout, bn):
-        super().__init__()
-        self.in_ = in_
-        self.bn = nn.BatchNorm2d(in_) if bn else None
-        self.activation = nn.ReLU(inplace=True)
-        self.conv = nn.Conv2d(in_, out, 1)
-        self.dropout = nn.Dropout2d(p=dropout) if dropout else None
-        self.pool = nn.MaxPool2d(scale, scale)
-
-    def forward(self, x):
-        if self.bn is not None:
-            x = self.bn(x)
-        x = self.activation(x)
-        x = self.conv(x)
-        if self.dropout is not None:
-            x = self.dropout(x)
-        x = self.pool(x)
-        return x
-
-
-class UpBlock(nn.Module):
-    def __init__(self, in_, out, scale):
-        super().__init__()
-        self.up_conv = nn.Conv2d(in_, out, 1)
-        self.upsample = nn.UpsamplingNearest2d(scale_factor=scale)
-
-    def forward(self, x):
-        return self.upsample(self.up_conv(x))
-
-
 class DenseNet(BaseNet):
-    """ https://arxiv.org/pdf/1611.09326v2.pdf
+    """
+    DenseNet implementation based on https://arxiv.org/pdf/1611.09326v2.pdf
     """
     def __init__(self, hps):
         super().__init__(hps)
@@ -565,5 +335,5 @@ class DenseNet(BaseNet):
                 x = block(concat([scale(x), skips[2 * self.n_layers - i]]))
         # Output
         x = self.output_conv(x)
-        b = self.hps.patch_border
+        b = self.hps.patch_overlap_size
         return F.sigmoid(x[:, :, b:-b, b:-b])

@@ -99,6 +99,6 @@ def start():
                 valid_ids=valid_ids,
                 validation=args.validation,
                 no_mp=args.no_mp,
-                valid_only=args.valid_only,
+                validate_only=args.valid_only,
                 model_path=args.model_path
                 )

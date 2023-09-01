@@ -193,9 +193,9 @@ def scale_percentile(matrix: np.ndarray) -> np.ndarray:
     return matrix.reshape([w, h, d]).clip(0, 1)
 
 
-def chunks(lst, n):
-    for i in range(0, len(lst), n):
-        yield lst[i: i + n]
+def chunk(items, size):
+    for i in range(0, len(items), size):
+        yield items[i: i + size]
 
 
 def mask_to_polygons(mask: np.ndarray, epsilon=5., min_area=10.,

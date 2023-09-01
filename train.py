@@ -8,14 +8,12 @@ from typing import List, Iterable
 import attr
 import cv2
 import numpy as np
-import tensorboard_logger
 import torch
 from torch.autograd import Variable
 import torch.cuda
 import torch.optim as optim
 import torch.nn as nn
 import tqdm
-import torchvision
 import utils
 from models import HyperParams
 import models
@@ -23,14 +21,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 logger = utils.get_logger(__name__)
 
-tb = SummaryWriter()
-model = CNN()
-train_loader = torch.utils.data.DataLoader(train_set,batch_size = 100, shuffle = True)
-images, labels = next(iter(train_loader))
-grid = torchvision.utils.make_grid(images)
-tb.add_image("images", grid)
-tb.add_graph(model, images)
-tb.close()
 
 @attr.s
 class Image:
@@ -78,8 +68,7 @@ class Model:
         self.optimizer.zero_grad()
         y_pred = self.nnetwork(self._var(x))
         batch_size = x.size()[0]
-        losses = self.losses(y, dist_y, y_pred)
-        cls_losses = [float(l.data[0]) for l in losses]
+        losses = self.class_losses(y, dist_y, y_pred)
         total_loss = losses[0]
         for l in losses[1:]:
             total_loss += l
@@ -87,34 +76,34 @@ class Model:
         self.optimizer.step()
         self.nnetwork.global_step += 1
 
-        return cls_losses
+        return losses
 
-    def losses(self,
-               ys: torch.FloatTensor,
-               ys_dist: torch.FloatTensor,
-               y_preds: Variable):
-        losses = []
+    def class_losses(self,
+                     ys: torch.FloatTensor,
+                     ys_dist: torch.FloatTensor,
+                     y_preds: Variable):
+        class_losses = []
         ys = self._var(ys)
         if self.hps.needs_dist:
             ys_dist = self._var(ys_dist)
         for cls_idx, _ in enumerate(self.hps.classes):
             y, y_pred = ys[:, cls_idx], y_preds[:, cls_idx]
             y_dist = ys_dist[:, cls_idx] if self.hps.needs_dist else None
-            loss = self._cls_loss(y, y_dist, y_pred)
-            losses.append(loss)
-        return losses
+            loss = self.calc_loss(y, y_dist, y_pred)
+            class_losses.append(loss)
+        return class_losses
 
-    def _cls_loss(self, y, y_dist, y_pred):
+    def calc_loss(self, y, y_dist, y_pred):
         hps = self.hps
         loss = 0.
         if hps.log_loss:
             loss += self.bce_loss(y_pred, y) * hps.log_loss
         if hps.dice_loss:
             intersection = (y_pred * y).sum()
-            uwi = y_pred.sum() + y.sum()  # without intersection union
+            union_without_intersection = y_pred.sum() + y.sum()  # without intersection union
 
-            if uwi[0] != 0:
-                loss += (1 - intersection / uwi) * hps.dice_loss
+            if union_without_intersection[0] != 0:
+                loss += (1 - intersection / union_without_intersection) * hps.dice_loss
 
         if hps.jaccard_loss:
             intersection = (y_pred * y).sum()
@@ -128,9 +117,9 @@ class Model:
 
         if hps.dist_dice_loss:
             intersection = (y_pred * y_dist).sum()
-            uwi = y_pred.sum() + y_dist.sum()  # without intersection union
-            if uwi[0] != 0:
-                loss += (1 - intersection / uwi) * hps.dist_dice_loss
+            union_without_intersection = y_pred.sum() + y_dist.sum()  # without intersection union
+            if union_without_intersection[0] != 0:
+                loss += (1 - intersection / union_without_intersection) * hps.dist_dice_loss
 
         if hps.dist_jaccard_loss:
             intersection = (y_pred * y_dist).sum()
@@ -143,14 +132,14 @@ class Model:
         return loss
 
     def train(self, logdir: Path, train_ids: List[str], valid_ids: List[str],
-              validation: str, no_mp: bool=False, valid_only: bool=False,
+              validation: str, no_mp: bool=False, validate_only: bool=False,
               model_path: Path=None):
         lr = self.hps.lr
-        comment = f' batch_size = {self.hps.batch_size} lr = {lr} shuffle = {shuffle}'
+        comment = f' batch_size = {self.hps.batch_size} lr = {lr}'
         self.tb_logger = SummaryWriter(comment=comment)
         self.logdir = logdir
         train_images = [self.load_image(im_id) for im_id in sorted(train_ids)]
-        valid_images = None
+        validate_images = None
         if model_path:
             self.restore_snapshot(model_path)
             start_epoch = int(model_path.name.rsplit('-', 1)[1]) + 1
@@ -158,48 +147,50 @@ class Model:
             start_epoch = self.restore_last_snapshot(logdir)
         square_validation = validation == 'square'
         self.optimizer = self._init_optimizer(lr)
-        for n_epoch in range(start_epoch, self.hps.n_epochs):
+        for epoch in range(start_epoch, self.hps.n_epoch):
             if self.hps.lr_decay:
-                if n_epoch % 2 == 0 or n_epoch == start_epoch:
-                    lr = self.hps.lr * self.hps.lr_decay ** n_epoch
+                if epoch % 2 == 0 or epoch == start_epoch:
+                    lr = self.hps.lr * self.hps.lr_decay ** epoch
                     self.optimizer = self._init_optimizer(lr)
             else:
+                # TODO make this a configuration option
                 lim_1, lim_2 = 25, 50
-                if n_epoch == lim_1 or (
-                        n_epoch == start_epoch and n_epoch > lim_1):
+                if epoch == lim_1 or (
+                        epoch == start_epoch and epoch > lim_1):
                     lr = self.hps.lr / 5
                     self.optimizer = self._init_optimizer(lr)
-                if n_epoch == lim_2 or (
-                        n_epoch == start_epoch and n_epoch > lim_2):
+                if epoch == lim_2 or (
+                        epoch == start_epoch and epoch > lim_2):
                     lr = self.hps.lr / 25
                     self.optimizer = self._init_optimizer(lr)
             logger.info('Starting epoch {}, step {:,}, lr {:.8f}'.format(
-                n_epoch + 1, self.nnetwork.global_step[0], lr))
-            subsample = 1 if valid_only else 2  # make validation more often
+                epoch + 1, self.nnetwork.global_step[0], lr))
+            subsample = 1 if validate_only else 2  # make validation more often
             for _ in range(subsample):
-                if not valid_only:
+                if not validate_only:
                     self.train_on_images(
                         train_images,
                         subsample=subsample,
                         square_validation=square_validation,
                         no_mp=no_mp)
-                if valid_images is None:
+                if validate_images is None:
                     if square_validation:
                         s = self.hps.validation_square
-                        valid_images = [
+                        validate_images = [
                             Image(None, im.data[:, :s, :s], im.mask[:, :s, :s])
                             for im in train_images]
                     else:
-                        valid_images = [self.load_image(im_id)
+                        validate_images = [self.load_image(im_id)
                                         for im_id in sorted(valid_ids)]
-                if valid_images:
-                    self.validate_on_images(valid_images, subsample=1)
-            if valid_only:
+                if validate_images:
+                    total_loss = self.validate_on_images(validate_images, subsample=1)
+                    print("loss:", total_loss)
+            if validate_only:
                 break
-            self.save_snapshot(n_epoch)
+            self.save_snapshot(epoch)
 
-            print("batch_size:", batch_size, "lr:", lr, "shuffle:", shuffle)
-            print("epoch:", epoch, "total_correct:", total_correct, "loss:", total_loss)
+            print("batch_size:", self.hps.batch_size, "lr:", lr)
+            print("epoch:", epoch)
         print("__________________________________________________________")
         self.tb_logger = None
         self.logdir = None
@@ -262,15 +253,15 @@ class Model:
                         square_validation: bool=False,
                         no_mp: bool=False):
         self.nnetwork.train()
-        b = self.hps.patch_border
-        s = self.hps.patch_inner
+        ovl = self.hps.patch_overlap_size
+        p = self.hps.patch_size
         # Extra margin for rotation
-        m = int(np.ceil((np.sqrt(2) - 1) * (b + s / 2)))
-        mb = m + b  # full margin
+        margin = int(np.ceil((np.sqrt(2) - 1) * (ovl + p / 2)))
+        margin = margin + ovl  # full margin
         mean_area = np.mean(
             [im.size[0] * im.size[1] for im in train_images])
         n_batches = int(
-            mean_area / (s + b) / self.hps.batch_size / subsample / 2)
+            mean_area / (p + ovl) / self.hps.batch_size / subsample / 2)
 
         def generate_batch(_):
             inputs, outputs, dist_outputs = [], [], []
@@ -278,14 +269,14 @@ class Model:
                 im, (x, y) = self.sample_im_xy(train_images, square_validation)
                 if random.random() < self.hps.oversample:
                     for _ in range(1000):
-                        if im.mask[x: x + s, y: y + s].sum():
+                        if im.mask[x: x + p, y: y + p].sum():
                             break
                         im, (x, y) = self.sample_im_xy(
                             train_images, square_validation)
-                patch = im.data[:, x - mb: x + s + mb, y - mb: y + s + mb]
-                mask = im.mask[:, x - m: x + s + m, y - m: y + s + m]
+                patch = im.data[:, x - margin: x + p + margin, y - margin: y + p + margin]
+                mask = im.mask[:, x - margin: x + p + margin, y - margin: y + p + margin]
                 if self.hps.needs_dist:
-                    dist_mask = im.dist_mask[:, x - m: x + s + m, y - m: y + s + m]
+                    dist_mask = im.dist_mask[:, x - margin: x + p + margin, y - margin: y + p + margin]
 
                 if self.hps.augment_flips:
                     if random.random() < 0.5:
@@ -312,11 +303,11 @@ class Model:
                         1, self.hps.augment_channels, patch.shape[0])
                     patch = patch * ch_shift[:, None, None]
 
-                inputs.append(patch[:, m: -m, m: -m].astype(np.float32))
-                outputs.append(mask[:, m: -m, m: -m].astype(np.float32))
+                inputs.append(patch[:, margin: -margin, margin: -margin].astype(np.float32))
+                outputs.append(mask[:, margin: -margin, margin: -margin].astype(np.float32))
                 if self.hps.needs_dist:
                     dist_outputs.append(
-                        dist_mask[:, m: -m, m: -m].astype(np.float32))
+                        dist_mask[:, margin: -margin, margin: -margin].astype(np.float32))
 
             return (torch.from_numpy(np.array(inputs)),
                     torch.from_numpy(np.array(outputs)),
@@ -325,18 +316,18 @@ class Model:
         self._train_on_feeds(generate_batch, n_batches, no_mp=no_mp)
 
     def sample_im_xy(self, train_images, square_validation=False):
-        b = self.hps.patch_border
-        s = self.hps.patch_inner
+        ovl = self.hps.patch_overlap_size
+        p = self.hps.patch_size
         # Extra margin for rotation
-        m = int(np.ceil((np.sqrt(2) - 1) * (b + s / 2)))
-        mb = m + b  # full margin
+        m = int(np.ceil((np.sqrt(2) - 1) * (ovl + p / 2)))
+        mb = m + ovl  # full margin
         im = random.choice(train_images)
         w, h = im.size
         min_xy = mb
         if square_validation:
             min_xy += self.hps.validation_square
-        return im, (random.randint(min_xy, w - (mb + s)),
-                    random.randint(min_xy, h - (mb + s)))
+        return im, (random.randint(min_xy, w - (mb + p)),
+                    random.randint(min_xy, h - (mb + p)))
 
     def _train_on_feeds(self, gen_batch, n_batches: int, no_mp: bool):
         losses = [[] for _ in range(self.hps.n_classes)]
@@ -439,12 +430,12 @@ class Model:
     def _log_im(self, xs: np.ndarray,
                 ys: np.ndarray, dist_ys: np.ndarray,
                 pred_ys: np.ndarray):
-        b = self.hps.patch_border
-        s = self.hps.patch_inner
-        border = np.zeros([b * 2 + s, b * 2 + s, 3], dtype=np.float32)
-        border[b, b:-b, :] = border[-b, b:-b, :] = 1
-        border[b:-b, b, :] = border[b:-b, -b, :] = 1
-        border[-b, -b, :] = 1
+        ovl = self.hps.patch_overlap_size
+        p = self.hps.patch_size
+        border = np.zeros([ovl * 2 + p, ovl * 2 + p, 3], dtype=np.float32)
+        border[ovl, ovl:-ovl, :] = border[-ovl, ovl:-ovl, :] = 1
+        border[ovl:-ovl, ovl, :] = border[ovl:-ovl, -ovl, :] = 1
+        border[-ovl, -ovl, :] = 1
         for i, (x, y, p) in enumerate(zip(xs, ys, pred_ys)):
             fname = lambda s: str(self.logdir / ('{:0>3}_{}.png'.format(i, s)))
             x = utils.scale_percentile(x.transpose(1, 2, 0))
@@ -484,55 +475,87 @@ class Model:
     def _log_value(self, name, value):
         self.tb_logger.add_scalar(name, value, self.nnetwork.global_step[0])
 
-    def validate_on_images(self, valid_images: List[Image],
+    def validate_on_images(self, validation_images: List[Image],
                            subsample: int=1):
+        """
+
+        :param validation_images:
+        :param subsample: The factor by which to subsample the validation images.
+        :return:
+        """
         self.nnetwork.eval()
-        b = self.hps.patch_border
-        s = self.hps.patch_inner
-        losses = [[] for _ in range(self.hps.n_classes)]
+        ovl = self.hps.patch_overlap_size
+        p = self.hps.patch_size
+        extended_patch_size = p + ovl
+        class_losses_per_batch = [[] for _ in range(self.hps.n_classes)]
         jaccard_stats = self._jaccard_stats()
-        for im in valid_images:
-            w, h = im.size
-            xs = range(b, w - (b + s), s)
-            ys = range(b, h - (b + s), s)
-            all_xy = [(x, y) for x in xs for y in ys]
-            if subsample != 1:
-                random.shuffle(all_xy)
-                all_xy = all_xy[:len(all_xy) // subsample]
-            for xy_batch in utils.chunks(all_xy, self.hps.batch_size // 2):
-                inputs = np.array(
-                    [im.data[:, x - b: x + s + b, y - b: y + s + b]
-                     for x, y in xy_batch]).astype(np.float32)
-                outputs = np.array(
-                    [im.mask[:, x: x + s, y: y + s] for x, y in xy_batch])
+        for image in validation_images:
+            width, height = image.size
+
+            x_offsets = range(ovl, width - extended_patch_size, p)
+            y_offsets = range(ovl, height - extended_patch_size, p)
+
+            chunk_offsets = [
+                (x_off, y_off)
+                for x_off in x_offsets
+                for y_off in y_offsets
+            ]
+
+            if subsample > 1:
+                random.shuffle(chunk_offsets)
+                chunk_offsets = chunk_offsets[:len(chunk_offsets) // subsample]
+
+            for xy_batch in utils.chunk(chunk_offsets, self.hps.batch_size // 2):
+
+                # Get the chunk of the image we want to predict on
+                chunk = np.array([
+                    image.data[:,
+                        x_offset - ovl: x_offset + extended_patch_size,
+                        y_offset - ovl: y_offset + extended_patch_size
+                    ]
+                     for x_offset, y_offset in xy_batch
+                ]).astype(np.float32)
+
+                # Get the ground truth for the chunk of the image we want to predict on
+                outputs = np.array([
+                    image.mask[:,
+                        x_offset: x_offset + p,
+                        y_offset: y_offset + p
+                    ]
+                    for x_offset, y_offset in xy_batch
+                ])
+
                 outputs = outputs.astype(np.float32)
                 if self.hps.needs_dist:
-                    dist_outputs = np.array([im.dist_mask[:, x: x + s, y: y + s]
+                    dist_outputs = np.array([image.dist_mask[:, x: x + p, y: y + p]
                                              for x, y in xy_batch])
                     dist_outputs = dist_outputs.astype(np.float32)
                 else:
                     dist_outputs = np.array([])
-                y_pred = self.nnetwork(self._var(torch.from_numpy(inputs)))
-                step_losses = self.losses(
+
+                y_pred = self.nnetwork(self._var(torch.from_numpy(chunk)))
+                step_losses = self.class_losses(
                     torch.from_numpy(outputs),
                     torch.from_numpy(dist_outputs),
                     y_pred)
-                for ls, l in zip(losses, step_losses):
-                    ls.append(l.data[0])
+
+                for cls, ls in zip(class_losses_per_batch, step_losses):
+                    cls.append(ls.data[0])
+
                 y_pred_numpy = y_pred.data.cpu().numpy()
                 self._update_jaccard(jaccard_stats, outputs, y_pred_numpy)
-        losses = np.array(losses)
+        class_losses_per_batch = np.array(class_losses_per_batch)
         logger.info('Valid loss: {:.3f}, Jaccard: {}'.format(
-            losses.mean(), self._format_jaccard(jaccard_stats)))
-        for cls, cls_losses in zip(self.hps.classes, losses):
+            class_losses_per_batch.mean(), self._format_jaccard(jaccard_stats)))
+        for cls, cls_losses in zip(self.hps.classes, class_losses_per_batch):
             self._log_value('valid-loss/cls-{}'.format(cls), cls_losses.mean())
         if self.hps.has_all_classes:
-            self._log_value('valid-loss/cls-mean', losses.mean())
+            self._log_value('valid-loss/cls-mean', class_losses_per_batch.mean())
         self._log_jaccard(jaccard_stats, prefix='valid-')
 
     def restore_last_snapshot(self, logdir: Path) -> int:
         average = 1  # TODO - pass
-        for n_epoch in reversed(range(self.hps.n_epochs)):
+        for n_epoch in reversed(range(self.hps.n_epoch)):
             model_path = self._model_path(logdir, n_epoch)
             if model_path.exists():
                 if average and average > 1:
@@ -573,19 +596,27 @@ class Model:
                            ) -> np.ndarray:
         self.nnetwork.eval()
         c, w, h = im_data.shape
-        b = self.hps.patch_border
-        s = self.hps.patch_inner
-        padded = np.zeros([c, w + 2 * b, h + 2 * b], dtype=im_data.dtype)
-        padded[:, b:-b, b:-b] = im_data
-        # mirror on the edges
-        padded[:, :b, b:-b] = np.flip(im_data[:, :b, :], 1)
-        padded[:, -b:, b:-b] = np.flip(im_data[:, -b:, :], 1)
-        padded[:, :, :b] = np.flip(padded[:, :, b: 2 * b], 2)
-        padded[:, :, -b:] = np.flip(padded[:, :, -2 * b: -b], 2)
-        step = s // 3 if average_shifts else s
-        margin = b if no_edges else 0
-        xs = list(range(margin, w - s - margin, step)) + [w - s - margin]
-        ys = list(range(margin, h - s - margin, step)) + [h - s - margin]
+        ovl = self.hps.patch_overlap_size
+
+        # Pad the image with zeros
+        padded = np.zeros([c, w + (2 * ovl), h + (2 * ovl)], dtype=im_data.dtype)
+        padded[:, ovl:-ovl, ovl:-ovl] = im_data
+
+        # Make the padded area mirror the image, TODO this has problems
+        # Left padded side excluding entire top and bottom
+        padded[:, :ovl, ovl:-ovl] = np.flip(im_data[:, :ovl, :], 1)
+        # Right padded side, excluding entire top and bottom
+        padded[:, -ovl:, ovl:-ovl] = np.flip(im_data[:, -ovl:, :], 1)
+        # Entire bottom mirrored, inc the corners (double mirrored)
+        padded[:, :, :ovl] = np.flip(padded[:, :, ovl: 2 * ovl], 2)
+        # Entire top mirrored, inc the corners (double mirrored)
+        padded[:, :, -ovl:] = np.flip(padded[:, :, -2 * ovl: -ovl], 2)
+
+        p_sz = self.hps.patch_size
+        step = p_sz // 3 if average_shifts else p_sz
+        margin = ovl if no_edges else 0
+        xs = list(range(margin, w - p_sz - margin, step)) + [w - p_sz - margin]
+        ys = list(range(margin, h - p_sz - margin, step)) + [h - p_sz - margin]
         all_xy = [(x, y) for x in xs for y in ys]
         out_shape = [self.hps.n_classes, w, h]
         pred_mask = np.zeros(out_shape, dtype=np.float32)
@@ -595,8 +626,8 @@ class Model:
         def gen_batch(xy_batch_):
             inputs_ = []
             for x, y in xy_batch_:
-                # shifted by -b to account for padding
-                patch = padded[:, x: x + s + 2 * b, y: y + s + 2 * b]
+                # shifted by -ovl to account for padding
+                patch = padded[:, x: x + p_sz + 2 * ovl, y: y + p_sz + 2 * ovl]
                 inputs_.append(patch)
                 for i in range(1, n_rot):
                     inputs_.append(utils.rotated(patch, i * 90))
@@ -604,7 +635,7 @@ class Model:
 
         for xy_batch, inputs in utils.imap_fixed_output_buffer(
                 gen_batch, tqdm.tqdm(list(
-                    utils.chunks(all_xy, self.hps.batch_size // (4 * n_rot)))),
+                    utils.chunk(all_xy, self.hps.batch_size // (4 * n_rot)))),
                 threads=2):
             y_pred = self.nnetwork(self._var(torch.from_numpy(inputs)))
             for idx, mask in enumerate(y_pred.data.cpu().numpy()):
@@ -613,8 +644,8 @@ class Model:
                 if i:
                     mask = utils.rotated(mask, -i * 90)
                 # mask = (mask >= 0.5) + 0.001
-                pred_mask[:, x: x + s, y: y + s] += mask / n_rot
-                pred_per_pixel[:, x: x + s, y: y + s] += 1
+                pred_mask[:, x: x + p_sz, y: y + p_sz] += mask / n_rot
+                pred_per_pixel[:, x: x + p_sz, y: y + p_sz] += 1
         if not no_edges:
             assert pred_per_pixel.min() >= 1
         pred_mask /= np.maximum(pred_per_pixel, 1)
