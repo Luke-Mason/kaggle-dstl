@@ -293,10 +293,10 @@ class Model:
                 if self.hps.augment_rotations:
                     assert self.hps.augment_rotations != 1  # old format
                     angle = (2 * random.random() - 1.) * self.hps.augment_rotations
-                    patch = utils.rotated(patch, angle)
-                    mask = utils.rotated(mask, angle)
+                    patch = utils.rotate(patch, angle)
+                    mask = utils.rotate(mask, angle)
                     if self.hps.needs_dist:
-                        dist_mask = utils.rotated(dist_mask, angle)
+                        dist_mask = utils.rotate(dist_mask, angle)
 
                 if self.hps.augment_channels:
                     ch_shift = np.random.normal(
@@ -592,7 +592,7 @@ class Model:
     def predict_image_mask(self, im_data: np.ndarray,
                            rotate: bool=False,
                            no_edges: bool=False,
-                           average_shifts: bool=True
+                           average_shifts: bool=False
                            ) -> np.ndarray:
         self.nnetwork.eval()
         c, w, h = im_data.shape
@@ -613,15 +613,15 @@ class Model:
         padded[:, :, -ovl:] = np.flip(padded[:, :, -2 * ovl: -ovl], 2)
 
         p_sz = self.hps.patch_size
+        skipped_margin = ovl if no_edges else 0
         step = p_sz // 3 if average_shifts else p_sz
-        margin = ovl if no_edges else 0
-        xs = list(range(margin, w - p_sz - margin, step)) + [w - p_sz - margin]
-        ys = list(range(margin, h - p_sz - margin, step)) + [h - p_sz - margin]
-        all_xy = [(x, y) for x in xs for y in ys]
-        out_shape = [self.hps.n_classes, w, h]
-        pred_mask = np.zeros(out_shape, dtype=np.float32)
-        pred_per_pixel = np.zeros(out_shape, dtype=np.int16)
-        n_rot = 4 if rotate else 1
+        edge_offset = p_sz + skipped_margin
+
+        x_offsets = list(range(skipped_margin, w - edge_offset, step)) + [w - edge_offset]
+        y_offsets = list(range(skipped_margin, h - edge_offset, step)) + [h - edge_offset]
+        chunk_offsets = [(x, y) for x in x_offsets for y in y_offsets]
+        pred_per_pixel = np.zeros([w, h], dtype=np.int16)
+        rotate_num = 4 if rotate else 1
 
         def gen_batch(xy_batch_):
             inputs_ = []
@@ -629,23 +629,24 @@ class Model:
                 # shifted by -ovl to account for padding
                 patch = padded[:, x: x + p_sz + 2 * ovl, y: y + p_sz + 2 * ovl]
                 inputs_.append(patch)
-                for i in range(1, n_rot):
-                    inputs_.append(utils.rotated(patch, i * 90))
+                for i in range(1, rotate_num):
+                    inputs_.append(utils.rotate(patch, i * 90))
             return xy_batch_, np.array(inputs_, dtype=np.float32)
 
+        # TODO continue here, why predict on rotated image?
         for xy_batch, inputs in utils.imap_fixed_output_buffer(
                 gen_batch, tqdm.tqdm(list(
-                    utils.chunk(all_xy, self.hps.batch_size // (4 * n_rot)))),
+                    utils.chunk(chunk_offsets, self.hps.batch_size // (4 * rotate_num)))),
                 threads=2):
             y_pred = self.nnetwork(self._var(torch.from_numpy(inputs)))
             for idx, mask in enumerate(y_pred.data.cpu().numpy()):
-                x, y = xy_batch[idx // n_rot]
-                i = idx % n_rot
+                x, y = xy_batch[idx // rotate_num]
+                i = idx % rotate_num
                 if i:
-                    mask = utils.rotated(mask, -i * 90)
+                    mask = utils.rotate(mask, -i * 90)
                 # mask = (mask >= 0.5) + 0.001
-                pred_mask[:, x: x + p_sz, y: y + p_sz] += mask / n_rot
-                pred_per_pixel[:, x: x + p_sz, y: y + p_sz] += 1
+                pred_mask[:, x:(x + p_sz), y:(y + p_sz)] += mask / rotate_num
+                pred_per_pixel[:, x:(x + p_sz), y:(y + p_sz)] += 1
         if not no_edges:
             assert pred_per_pixel.min() >= 1
         pred_mask /= np.maximum(pred_per_pixel, 1)

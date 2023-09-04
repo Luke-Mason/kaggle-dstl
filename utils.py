@@ -169,7 +169,7 @@ def mask_for_polygons(
     return img_mask
 
 
-def rotated(patch: np.ndarray, angle: float) -> np.ndarray:
+def rotate(patch: np.ndarray, angle: float) -> np.ndarray:
     patch = patch.transpose([1, 2, 0]).astype(np.float32)
     size = patch.shape[:2]
     center = tuple(np.array(size) / 2)
