@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/bin/bash
+"exec" "pyenv" "exec" "python" "$0" "$@"
 from functools import partial
 from pathlib import Path
 import random

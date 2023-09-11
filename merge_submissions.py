@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/bin/bash
+"exec" "pyenv" "exec" "python" "$0" "$@"
 import argparse
 import csv
 import gzip

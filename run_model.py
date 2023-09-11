@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/bin/bash
+"exec" "pyenv" "exec" "python" "$0" "$@"
 import argparse
 import csv
 import json
@@ -6,7 +7,6 @@ import gzip
 from functools import partial
 from pathlib import Path
 from multiprocessing.pool import Pool
-import traceback
 from typing import List, Tuple, Set
 
 import cv2
@@ -16,7 +16,8 @@ from shapely.geometry import MultiPolygon
 import shapely.wkt
 
 import utils
-from train import Model, HyperParams, Image
+from model import Model, Image
+from HyperParams import HyperParams
 
 
 logger = utils.get_logger(__name__)
