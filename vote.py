@@ -1,4 +1,4 @@
-#!/opt/home/s3630120/.pyenv/shims/python
+#!/usr/bin/env python
 import pandas as pd
 import shapely.wkt
 from shapely.ops import unary_union

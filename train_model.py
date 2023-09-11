@@ -1,4 +1,4 @@
-#!/opt/home/s3630120/.pyenv/shims/python
+#!/usr/bin/env python
 import argparse
 import json
 from pathlib import Path

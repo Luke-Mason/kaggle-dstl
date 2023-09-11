@@ -1,4 +1,4 @@
-#!/opt/home/s3630120/.pyenv/shims/python
+#!/usr/bin/env python
 from functools import partial
 from pathlib import Path
 import random
