@@ -7,7 +7,8 @@ import attr
 import numpy as np
 from sklearn.model_selection import ShuffleSplit
 import utils
-from train import HyperParams, Model
+from model import Model
+from HyperParams import HyperParams
 
 logger = utils.get_logger(__name__)
 
