@@ -633,7 +633,7 @@ class Model:
                     inputs_.append(utils.rotate(patch, i * 90))
             return xy_batch_, np.array(inputs_, dtype=np.float32)
 
-        # TODO continue here, why predict on rotated image?
+        # Predict on rotated image, to learn from it.
         for xy_batch, inputs in utils.imap_fixed_output_buffer(
                 gen_batch, tqdm.tqdm(list(
                     utils.chunk(chunk_offsets, self.hps.batch_size // (4 * rotate_num)))),
