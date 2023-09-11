@@ -620,6 +620,7 @@ class Model:
         x_offsets = list(range(skipped_margin, w - edge_offset, step)) + [w - edge_offset]
         y_offsets = list(range(skipped_margin, h - edge_offset, step)) + [h - edge_offset]
         chunk_offsets = [(x, y) for x in x_offsets for y in y_offsets]
+        pred_mask = np.zeros([self.hps.n_classes, w, h], dtype=np.float32)
         pred_per_pixel = np.zeros([w, h], dtype=np.int16)
         rotate_num = 4 if rotate else 1
 
