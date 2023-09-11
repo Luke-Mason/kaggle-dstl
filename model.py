@@ -1,5 +1,4 @@
-#!/bin/bash
-"exec" "pyenv" "exec" "python" "$0" "$@"
+#!/opt/home/s3630120/.pyenv/shims/python
 from functools import partial
 from pathlib import Path
 import random

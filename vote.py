@@ -1,5 +1,4 @@
-#!/bin/bash
-"exec" "pyenv" "exec" "python" "$0" "$@"
+#!/opt/home/s3630120/.pyenv/shims/python
 import pandas as pd
 import shapely.wkt
 from shapely.ops import unary_union
