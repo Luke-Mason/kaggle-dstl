@@ -11,7 +11,10 @@ from model import Model
 from HyperParams import HyperParams
 
 logger = utils.get_logger(__name__)
-from utils import dataset_root_path
+# default_dataset_path = '/mnt/e/ML_DATA/DSTL/dstl-satellite-imagery-feature' \
+#                   '-detection/'
+default_dataset_path = '/training_data/DSTL/dstl-satellite-imagery-feature' \
+                  '-detection/'
 
 def start():
     parser = argparse.ArgumentParser()
@@ -25,7 +28,7 @@ def start():
     arg('--clean', action='store_true', help='Clean logdir')
     arg('--no-mp', action='store_true', help='Disable multiprocessing')
     arg('--model-path', type=Path)
-    arg('--data-path', type=Path, default=dataset_root_path)
+    arg('--data-path', type=Path, default=default_dataset_path)
     args = parser.parse_args()
     print('test')
     logdir = Path(args.logdir)

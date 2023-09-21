@@ -15,8 +15,10 @@ import torch.optim as optim
 import torch.nn as nn
 import tqdm
 import utils
-from models import HyperParams
+from networks import HyperParams
+from utils import dataset_root_path
 import models
+
 from torch.utils.tensorboard import SummaryWriter
 
 logger = utils.get_logger(__name__)
@@ -67,6 +69,8 @@ class Model:
     def train_step(self, x, y, dist_y):
         self.optimizer.zero_grad()
         y_pred = self.nnetwork(self._var(x))
+        print(y_pred.shape)
+        print('---------------------------------------')
         batch_size = x.size()[0]
         losses = self.class_losses(y, dist_y, y_pred)
         total_loss = losses[0]
@@ -147,7 +151,7 @@ class Model:
             start_epoch = self.restore_last_snapshot(logdir)
         square_validation = validation == 'square'
         self.optimizer = self._init_optimizer(lr)
-        for epoch in range(start_epoch, self.hps.n_epoch):
+        for epoch in range(start_epoch, self.hps.n_epochs):
             if self.hps.lr_decay:
                 if epoch % 2 == 0 or epoch == start_epoch:
                     lr = self.hps.lr * self.hps.lr_decay ** epoch
@@ -217,7 +221,7 @@ class Model:
 
     def load_image(self, im_id: str) -> Image:
         logger.info('Loading {}'.format(im_id))
-        im_cache = Path('im_cache')
+        im_cache = Path(dataset_root_path + 'im_cache')
         im_cache.mkdir(exist_ok=True)
         im_data_path = im_cache.joinpath('{}.data'.format(im_id))
         mask_path = im_cache.joinpath('{}.mask'.format(im_id))
@@ -357,6 +361,8 @@ class Model:
                         'loss/cls-mean', np.mean([
                             l for ls in losses for l in ls[-log_step:]]))
                 pred_y = self.nnetwork(self._var(x)).data.cpu()
+                print('---------------------------------------')
+                print(pred_y.shape)
                 self._update_jaccard(jaccard_stats, y.numpy(), pred_y.numpy())
                 self._log_jaccard(jaccard_stats)
                 if i == im_log_step:
@@ -555,7 +561,7 @@ class Model:
 
     def restore_last_snapshot(self, logdir: Path) -> int:
         average = 1  # TODO - pass
-        for n_epoch in reversed(range(self.hps.n_epoch)):
+        for n_epoch in reversed(range(self.hps.n_epochs)):
             model_path = self._model_path(logdir, n_epoch)
             if model_path.exists():
                 if average and average > 1:

@@ -19,7 +19,9 @@ import tifffile as tiff
 
 csv.field_size_limit(sys.maxsize)
 
-dataset_path = '/mnt/e/ML_DATA/DSTL/dstl-satellite-imagery-feature-detection/'
+dataset_root_path = '/training_data/DSTL/'
+dataset_path = dataset_root_path + 'dstl-satellite-imagery-feature-detection/'
+
 _x_max_y_min = None
 _wkt_data = None
 
@@ -44,7 +46,7 @@ def get_wkt_data() -> Dict[str, Dict[int, str]]:
 
 
 def load_image(im_id: str, rgb_only=False, align=True) -> np.ndarray:
-    im_rgb = tiff.imread(dataset_path + 'three_band/three_band/{}.tif'.format(im_id)).transpose([1, 2, 0])
+    im_rgb = tiff.imread(dataset_path + 'three_band/{}.tif'.format(im_id)).transpose([1, 2, 0])
     if rgb_only:
         return im_rgb
     im_p = np.expand_dims(tiff.imread(dataset_path + 'sixteen_band/sixteen_band/{}_P.tif'.format(im_id)), 2)
@@ -97,7 +99,7 @@ def _aligned(im_ref, im, im_to_align=None, key=None):
 
 def _get_alignment(im_ref, im_to_align, key):
     if key is not None:
-        cached_path = Path('align_cache').joinpath('{}.alignment'.format(key))
+        cached_path = Path(dataset_root_path + 'align_cache').joinpath('{}.alignment'.format(key))
         if cached_path.exists():
             with cached_path.open('rb') as f:
                 return pickle.load(f)
@@ -161,8 +163,8 @@ def mask_for_polygons(
     if not polygons:
         return img_mask
     int_coords = lambda x: np.array(x).round().astype(np.int32)
-    exteriors = [int_coords(poly.exterior.coords) for poly in polygons]
-    interiors = [int_coords(pi.coords) for poly in polygons
+    exteriors = [int_coords(poly.exterior.coords) for poly in polygons.geoms]
+    interiors = [int_coords(pi.coords) for poly in polygons.geoms
                  for pi in poly.interiors]
     cv2.fillPoly(img_mask, exteriors, 1)
     cv2.fillPoly(img_mask, interiors, 0)
