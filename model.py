@@ -142,7 +142,8 @@ class Model:
         comment = f' batch_size = {self.hps.batch_size} lr = {lr}'
         self.tb_logger = SummaryWriter(comment=comment)
         self.logdir = logdir
-        validate_images = None
+        train_images = [self.load_image(im_id) for im_id in sorted(train_ids)]
+        valid_images = None
         if model_path:
             self.restore_snapshot(model_path)
             start_epoch = int(model_path.name.rsplit('-', 1)[1]) + 1
@@ -172,7 +173,7 @@ class Model:
             for _ in range(subsample):
                 if not validate_only:
                     self.train_on_images(
-                        train_ids,
+                        train_images,
                         subsample=subsample,
                         square_validation=square_validation,
                         no_mp=no_mp)
@@ -181,10 +182,10 @@ class Model:
                         s = self.hps.validation_square
                         validate_images = [
                             Image(None, im.data[:, :s, :s], im.mask[:, :s, :s])
-                            for im in train_ids]
+                            for im in train_images]
                     else:
                         validate_images = [self.load_image(im_id)
-                                        for im_id in sorted(valid_ids)]
+                                        for im_id in sorted(valid_images)]
                 if validate_images:
                     total_loss = self.validate_on_images(validate_images, subsample=1)
                     print("loss:", total_loss)
@@ -351,7 +352,7 @@ class Model:
         im_log_step = n_batches // log_step * log_step
         map_ = (map if no_mp else
                 partial(utils.imap_fixed_output_buffer, threads=4))
-        for i, (x, y, dist_y) in enumerate(map_(gen_batch, range(n_batches))):
+        for i, (x, y_mask, dist_y) in enumerate(map_(gen_batch, range(n_batches))):
             if losses[0] and i % log_step == 0:
                 for cls, ls in zip(self.hps.classes, losses):
                     self._log_value(
@@ -360,15 +361,15 @@ class Model:
                     self._log_value(
                         'loss/cls-mean', np.mean([
                             l for ls in losses for l in ls[-log_step:]]))
-                pred_y = self.nnetwork(self._var(x)).data.cpu()
+                pred_y_mask = self.nnetwork(self._var(x)).data.cpu()
                 print('---------------------------------------')
-                print(pred_y.shape)
-                self._update_jaccard(jaccard_stats, y.numpy(), pred_y.numpy())
+                print(pred_y_mask.shape)
+                self._update_jaccard(jaccard_stats, y_mask.numpy(), pred_y_mask.numpy())
                 self._log_jaccard(jaccard_stats)
                 if i == im_log_step:
                     self._log_im(
-                        x.numpy(), y.numpy(), dist_y.numpy(), pred_y.numpy())
-            step_losses = self.train_step(x, y, dist_y)
+                        x.numpy(), y_mask.numpy(), dist_y.numpy(), pred_y_mask.numpy())
+            step_losses = self.train_step(x, y_mask, dist_y)
             for ls, l in zip(losses, step_losses):
                 ls.append(l)
             t1 = time.time()

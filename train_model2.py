@@ -9,7 +9,7 @@ import torch
 from sklearn.model_selection import ShuffleSplit
 from torch.utils.data import DataLoader
 from torchvision.transforms import transforms
-
+import random
 import utils
 from data_loader import Model, SatelliteImageDataset
 from HyperParams import HyperParams
@@ -54,8 +54,6 @@ def start():
     model = Model(hps=hps)
     all_im_ids = list(utils.get_wkt_data())
 
-
-
     # Get the training ids of the images from the dataset classes stats file.
     mask_stats = json.loads(Path('cls-stats.json').read_text())
 
@@ -96,54 +94,31 @@ def start():
 
     transform_pipline = []
 
-    if self.hps.needs_dist:
-        dist_mask = im.dist_mask[:, x - margin: x + p + margin,
-                    y - margin: y + p + margin]
+    # TODO what is the mask and dist_mask? and what is the output of the
+    #  model? how do we get the bounding boxes or do we not get them?
+
 
     if hps.augment_flips:
-        [
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ]
-        if random.random() < 0.5:
-            transforms.RandomHorizontalFlip(),
-            patch = np.flip(patch, 1)
-            mask = np.flip(mask, 1)
-            if self.hps.needs_dist:
-                dist_mask = np.flip(dist_mask, 1)
-        if random.random() < 0.5:
-            patch = np.flip(patch, 2)
-            mask = np.flip(mask, 2)
-            if self.hps.needs_dist:
-                dist_mask = np.flip(dist_mask, 2)
+        transform_pipline.append(transforms.RandomHorizontalFlip())
+        transform_pipline.append(transforms.RandomVerticalFlip())
 
-    if self.hps.augment_rotations:
-        assert self.hps.augment_rotations != 1  # old format
-        angle = (2 * random.random() - 1.) * self.hps.augment_rotations
-        patch = utils.rotate(patch, angle)
-        mask = utils.rotate(mask, angle)
-        if self.hps.needs_dist:
-            dist_mask = utils.rotate(dist_mask, angle)
+    if hps.augment_rotations:
+        assert hps.augment_rotations != 1  # old format
+        angle = (2 * random.random() - 1.) * hps.augment_rotations
+        transform_pipline.append(transforms.RandomRotation(angle))
 
-    if self.hps.augment_channels:
-        ch_shift = np.random.normal(
-            1, self.hps.augment_channels, patch.shape[0])
-        patch = patch * ch_shift[:, None, None]
-
-    inputs.append(patch[:, margin: -margin, margin: -margin].astype(np.float32))
-    outputs.append(mask[:, margin: -margin, margin: -margin].astype(np.float32))
-    if self.hps.needs_dist:
-        dist_outputs.append(
-            dist_mask[:, margin: -margin, margin: -margin].astype(np.float32))
+    if hps.augment_channels:
+        transform_pipline.append(transforms.Lambda(
+            lambda x: x * np.random.normal(
+                1, hps.augment_channels, x.shape[0])[:, None, None]))
 
     transform_pipline.append(transforms.ToTensor())
     transform = transforms.Compose(transform_pipline)
 
+    # TODO valid ids
     data_paths = [args.data_path.joinpath(im_id + '.tif') for im_id in train_ids]
-
     dataset = SatelliteImageDataset(data_paths, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size,
+    dataloader = DataLoader(dataset, batch_size=hps.batch_size,
                             collate_fn=load_from_disk)
 
     model = Model(hps)
