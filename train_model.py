@@ -78,6 +78,7 @@ def start():
     if args.valid_only:
         train_ids = []
 
+
     train_area_by_class, valid_area_by_class = [
         {cls: np.mean(
             [mask_stats[im_id][str(cls)]['area'] for im_id in im_ids])

@@ -332,7 +332,7 @@ class Model:
             min_xy += self.hps.validation_square
         return im, (random.randint(min_xy, w - (mb + p)),
                     random.randint(min_xy, h - (mb + p)))
-
+# 0 - 256
     def _train_on_feeds(self, gen_batch, n_batches: int, no_mp: bool):
         losses = [[] for _ in range(self.hps.n_classes)]
         jaccard_stats = self._jaccard_stats()
