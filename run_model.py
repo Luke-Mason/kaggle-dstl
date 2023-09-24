@@ -146,7 +146,8 @@ def predict_masks(args, hps, store, to_predict: List[str], threshold: float,
         model.restore_last_snapshot(args.logdir)
 
     def load_im(im_id):
-        data = model.preprocess_image(utils.load_image(im_id))
+        # data = model.preprocess_image(utils.load_image(im_id))
+        data = utils.load_image(im_id)
         if hps.n_channels != data.shape[0]:
             data = data[:hps.n_channels]
         if validation == 'square':

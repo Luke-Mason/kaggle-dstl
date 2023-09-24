@@ -17,7 +17,7 @@ import tqdm
 import utils
 from networks import HyperParams
 from utils import dataset_root_path
-import models
+import networks
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -49,7 +49,7 @@ class Image:
 class Model:
     def __init__(self, hps: HyperParams):
         self.hps = hps
-        self.nnetwork = getattr(models, hps.net)(hps)
+        self.nnetwork = getattr(networks, hps.net)(hps)
         self.bce_loss = nn.BCELoss()
         self.mse_loss = nn.MSELoss()
         self.optimizer = None  # type: optim.Optimizer
@@ -142,7 +142,6 @@ class Model:
         comment = f' batch_size = {self.hps.batch_size} lr = {lr}'
         self.tb_logger = SummaryWriter(comment=comment)
         self.logdir = logdir
-        train_images = [self.load_image(im_id) for im_id in sorted(train_ids)]
         validate_images = None
         if model_path:
             self.restore_snapshot(model_path)
@@ -151,7 +150,7 @@ class Model:
             start_epoch = self.restore_last_snapshot(logdir)
         square_validation = validation == 'square'
         self.optimizer = self._init_optimizer(lr)
-        for epoch in range(start_epoch, self.hps.n_epochs):
+        for epoch in range(start_epoch, self.hps.epochs):
             if self.hps.lr_decay:
                 if epoch % 2 == 0 or epoch == start_epoch:
                     lr = self.hps.lr * self.hps.lr_decay ** epoch
@@ -173,7 +172,7 @@ class Model:
             for _ in range(subsample):
                 if not validate_only:
                     self.train_on_images(
-                        train_images,
+                        train_ids,
                         subsample=subsample,
                         square_validation=square_validation,
                         no_mp=no_mp)
@@ -182,7 +181,7 @@ class Model:
                         s = self.hps.validation_square
                         validate_images = [
                             Image(None, im.data[:, :s, :s], im.mask[:, :s, :s])
-                            for im in train_images]
+                            for im in train_ids]
                     else:
                         validate_images = [self.load_image(im_id)
                                         for im_id in sorted(valid_ids)]
@@ -228,7 +227,8 @@ class Model:
         if im_data_path.exists():
             im_data = np.load(str(im_data_path))
         else:
-            im_data = self.preprocess_image(utils.load_image(im_id))
+            # im_data = self.preprocess_image(utils.load_image(im_id))
+            im_data = utils.load_image(im_id)
             with im_data_path.open('wb') as f:
                 np.save(f, im_data)
         pre_buffer = self.hps.pre_buffer
@@ -561,7 +561,7 @@ class Model:
 
     def restore_last_snapshot(self, logdir: Path) -> int:
         average = 1  # TODO - pass
-        for n_epoch in reversed(range(self.hps.n_epochs)):
+        for n_epoch in reversed(range(self.hps.epochs)):
             model_path = self._model_path(logdir, n_epoch)
             if model_path.exists():
                 if average and average > 1:
