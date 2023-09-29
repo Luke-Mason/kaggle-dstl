@@ -216,6 +216,26 @@ class Model:
             4243.25847972, 4473.47956815, 4178.84648439, 3708.16482918,
             2887.49330138, 2589.61786722, 2525.53347208, 2417.23798598],
             dtype=np.float32)
+
+
+        # Mean for Type P, Band 1: 503.58188970939926
+        # Mean for Type M, Band 1: 296.5393404081892
+        # Mean for Type M, Band 2: 329.3482441387011
+        # Mean for Type M, Band 3: 464.96379164466254
+        # Mean for Type M, Band 4: 487.47826285625166
+        # Mean for Type M, Band 5: 427.30320381069293
+        # Mean for Type M, Band 6: 531.2880633344082
+        # Mean for Type M, Band 7: 689.7117900623391
+        # Mean for Type M, Band 8: 531.1469588868024
+        # Mean for Type A, Band 1: 4303.20706921944
+        # Mean for Type A, Band 2: 4558.573217857693
+        # Mean for Type A, Band 3: 4250.339562130438
+        # Mean for Type A, Band 4: 3783.3650561624863
+        # Mean for Type A, Band 5: 2953.575996307124
+        # Mean for Type A, Band 6: 2650.5233486470447
+        # Mean for Type A, Band 7: 2586.8447783175434
+        # Mean for Type A, Band 8: 2486.5040951355154
+
         scaled = ((im_data - mean) / std).astype(np.float16)
         return scaled.transpose([2, 0, 1])  # torch order
 
