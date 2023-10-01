@@ -19,7 +19,7 @@ import tifffile as tiff
 
 csv.field_size_limit(sys.maxsize)
 
-dataset_root_path = '/training_data/DSTL/'
+dataset_root_path = '/opt/home/s3630120/'
 dataset_path = dataset_root_path + 'dstl-satellite-imagery-feature-detection/'
 
 _x_max_y_min = None
@@ -46,7 +46,7 @@ def get_wkt_data() -> Dict[str, Dict[int, str]]:
 
 
 def load_image(im_id: str, rgb_only=False, align=True) -> np.ndarray:
-    im_rgb = tiff.imread(dataset_path + 'three_band/{}.tif'.format(im_id)).transpose([1, 2, 0])
+    im_rgb = tiff.imread(dataset_path + 'three_band/three_band/{}.tif'.format(im_id)).transpose([1, 2, 0])
     if rgb_only:
         return im_rgb
     im_p = np.expand_dims(tiff.imread(dataset_path + 'sixteen_band/sixteen_band/{}_P.tif'.format(im_id)), 2)
